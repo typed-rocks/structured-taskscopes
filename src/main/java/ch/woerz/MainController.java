@@ -1,63 +1,50 @@
 package ch.woerz;
 
-import ch.woerz.oldsv.TestRecord;
-import ch.woerz.oldsv.ThreadLocals;
-import ch.woerz.speakerinfo.AggregatorService;
-import ch.woerz.speakerinfo.AggregatorServiceAsync;
-import ch.woerz.speakerinfo.Model.Speaker;
-import jakarta.annotation.PostConstruct;
+
 import lombok.SneakyThrows;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
-import java.util.concurrent.CompletableFuture;
+import static ch.woerz.AllLocals.USER_SC;
+import static ch.woerz.AllLocals.USER_TL;
 
 @RestController
 @RequestMapping("/api")
 public class MainController {
 
   @Autowired
-  private AggregatorService aggregatorService;
+  private FakeHttpService fakeHttpService;
 
-  @Autowired
-  private AggregatorServiceAsync aggregatorServiceAsync;
-
-  @SneakyThrows
-  @PostConstruct
-  void start() {
-    var t1 = Thread.ofPlatform().unstarted(() -> {
-      TestRecord asdf = new TestRecord("asdf");
-      ThreadLocals.USER_TL.set(asdf);
-
-      var inner = Thread.ofPlatform().unstarted(() -> {
-        System.out.println(ThreadLocals.USER_TL.get());
-      });
-
-      inner.start();
-      try {
-        inner.join();
-      } catch (InterruptedException e) {
-        throw new RuntimeException(e);
-      }
-    });
-
-    t1.start();
-    t1.join();
+  @GetMapping("/talk/{name}")
+  Talk getTalk(@PathVariable String name) {
+    return fakeHttpService.retrieveTalk(name);
   }
 
   @SneakyThrows
-  @GetMapping("/speaker")
-  public Speaker getSpeaker() {
-    return aggregatorService.aggregate("speaker");
+  @GetMapping("/speaker/{name}")
+  Speaker getSpeaker(@PathVariable String name) {
+    System.out.println("MainController TL: " + USER_TL.get());
+    System.out.println("MainController SV: " + USER_SC.get());
+    try (var scope = new SpeakerTaskScope()) {
+      scope.fork(() -> fakeHttpService.retrieveTalk(name));
+      scope.fork(() -> getSpeakerInfos(name));
+      scope.join();
+      return scope.getSpeaker();
+    }
   }
 
-
   @SneakyThrows
-  @GetMapping("/speaker-async")
-  public CompletableFuture<Speaker> getSpeakerAsync() {
-    return aggregatorServiceAsync.aggregateAsync("speaker");
+  Infos getSpeakerInfos(String name) {
+    try (var scope = new InfoTaskScope()) {
+      scope.fork(() -> fakeHttpService.retrieveInfoFromGoogle(name));
+      scope.fork(() -> fakeHttpService.retrieveInfoFromFacebook(name));
+      scope.fork(() -> fakeHttpService.retrieveInfoFromLinkedin(name));
+      scope.join();
+      return scope.bestInfos();
+    }
   }
 
 }
